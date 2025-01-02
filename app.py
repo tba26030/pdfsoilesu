@@ -173,29 +173,25 @@ if st.session_state.conversation:
                 user_question = question
 
     if user_question:
-    try:
-        with st.spinner("Жауап іздеуде..."):
-            # Get response
-            response = st.session_state.conversation({
-                "question": f"""
-                Сұраққа қазақ тілінде жауап беріңіз.
-                Егер құжатта жауап табылмаса, оны айтыңыз.
-                Сұрақ: {user_question}
-                """
-            })
-            
-            # Store chat history
-            st.session_state.chat_history.append((user_question, response['answer']))
-            
-            # Generate new suggested questions
-            st.session_state.suggested_questions = generate_suggested_questions(response['answer'])
-
-            # Reset user question
-            user_question = ""
-
-    except Exception as e:
-        st.error(f"Жауап алу кезінде қате орын алды: {str(e)}")
-        st.error("Толық қате: " + str(e))
+        try:
+            with st.spinner("Жауап іздеуде..."):
+                # Get response
+                response = st.session_state.conversation({
+                    "question": f"""
+                    Сұраққа қазақ тілінде жауап беріңіз.
+                    Егер құжатта жауап табылмаса, оны айтыңыз.
+                    Сұрақ: {user_question}
+                    """
+                })
+                
+                # Store chat history
+                st.session_state.chat_history.append((user_question, response['answer']))
+                
+                # Generate new suggested questions
+                st.session_state.suggested_questions = generate_suggested_questions(response['answer'])
+                
+        except Exception as e:
+            st.error(f"Жауап алу кезінде қате орын алды: {str(e)}")
 
 # Display chat history
 for i, (question, answer) in enumerate(st.session_state.chat_history):
