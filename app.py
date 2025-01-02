@@ -1,8 +1,9 @@
 import streamlit as st
 import os
+from PyPDF2 import PdfReader
 from langchain.embeddings.openai import OpenAIEmbeddings
 from langchain.vectorstores import FAISS
-from langchain.document_loaders import PyPDFLoader
+from langchain.text_splitter import CharacterTextSplitter
 from langchain.chains import ChatVectorDBChain
 from langchain.chat_models import ChatOpenAI
 import openai
@@ -37,11 +38,19 @@ st.info("PDF құжат өңделуде, күтіңіз...")
 with open("temp.pdf", "wb") as f:
     f.write(uploaded_file.getbuffer())
 
-loader = PyPDFLoader("temp.pdf")
-documents = loader.load()
+# PDF мәтінін оқу
+with open("temp.pdf", "rb") as f:
+    reader = PdfReader(f)
+    raw_text = ""
+    for page in reader.pages:
+        raw_text += page.extract_text()
 
 # Уақытша файлды жою
 os.remove("temp.pdf")
+
+# Мәтінді бөлу
+text_splitter = CharacterTextSplitter(chunk_size=1000, chunk_overlap=200)
+documents = text_splitter.create_documents([raw_text])
 
 # Embedding және вектор қоры
 embeddings = OpenAIEmbeddings()
