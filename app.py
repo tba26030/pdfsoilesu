@@ -1,16 +1,16 @@
 import streamlit as st
 from langchain_community.document_loaders import PyPDFLoader
 from langchain_text_splitters import CharacterTextSplitter
-from langchain_openai import OpenAIEmbeddings
+from langchain_openai import OpenAIEmbeddings, ChatOpenAI
 from langchain_community.vectorstores import FAISS
-from langchain_openai import ChatOpenAI
-from langchain.memory import ConversationBufferMemory
-from langchain.chains import ConversationalRetrievalChain
+from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
+from langchain_core.output_parsers import StrOutputParser
+from langchain_core.runnables import RunnablePassthrough
+from langchain_core.messages import AIMessage, HumanMessage
 import tempfile
 import os
-import openai
 from openai import OpenAI
-import time
+from typing import List, Tuple
 
 # Streamlit page configuration
 st.set_page_config(
@@ -26,9 +26,6 @@ st.markdown("""
         max-width: 1200px;
         margin: 0 auto;
     }
-    .css-1d391kg {
-        padding: 2rem 1rem;
-    }
     .stButton>button {
         width: 100%;
     }
@@ -38,6 +35,18 @@ st.markdown("""
         border-radius: 5px;
         margin: 10px 0;
     }
+    .chat-message {
+        padding: 1rem;
+        border-radius: 0.5rem;
+        margin-bottom: 1rem;
+        border: 1px solid #e2e8f0;
+    }
+    .user-message {
+        background-color: #f8fafc;
+    }
+    .bot-message {
+        background-color: #f0f9ff;
+    }
     </style>
     """, unsafe_allow_html=True)
 
@@ -46,19 +55,18 @@ st.title("📚 PDF құжатпен қазақша сөйлесу")
 st.markdown("PDF құжаттарыңызбен қазақ тілінде сөйлесіңіз. Кез-келген тілдегі PDF құжаттарға қазақша сұрақ қоя аласыз.")
 
 # Initialize session state
-if 'conversation' not in st.session_state:
-    st.session_state.conversation = None
 if 'chat_history' not in st.session_state:
     st.session_state.chat_history = []
 if 'suggested_questions' not in st.session_state:
     st.session_state.suggested_questions = []
-if 'error' not in st.session_state:
-    st.session_state.error = None
+if 'vectorstore' not in st.session_state:
+    st.session_state.vectorstore = None
 
 # API key input
 api_key = st.text_input("OpenAI API кілтін енгізіңіз:", type="password")
 
-def validate_api_key(api_key):
+def validate_api_key(api_key: str) -> bool:
+    """Validate OpenAI API key"""
     try:
         client = OpenAI(api_key=api_key)
         client.models.list()
@@ -66,7 +74,8 @@ def validate_api_key(api_key):
     except Exception:
         return False
 
-def process_pdf(uploaded_file):
+def process_pdf(uploaded_file) -> FAISS:
+    """Process PDF file and create vector store"""
     try:
         with tempfile.NamedTemporaryFile(delete=False) as tmp_file:
             tmp_file.write(uploaded_file.getvalue())
@@ -82,32 +91,65 @@ def process_pdf(uploaded_file):
         embeddings = OpenAIEmbeddings(openai_api_key=api_key)
         vectorstore = FAISS.from_documents(documents, embeddings)
 
-        # Create conversation chain
-        llm = ChatOpenAI(
-            temperature=0.7,
-            model_name='gpt-3.5-turbo',  # Changed to gpt-3.5-turbo for better stability
-            openai_api_key=api_key
-        )
-        memory = ConversationBufferMemory(
-            memory_key='chat_history',
-            return_messages=True
-        )
-        
-        conversation_chain = ConversationalRetrievalChain.from_llm(
-            llm=llm,
-            retriever=vectorstore.as_retriever(),
-            memory=memory,
-        )
-
         # Clean up temp file
         os.unlink(tmp_file_path)
         
-        return conversation_chain
+        return vectorstore
     except Exception as e:
-        st.session_state.error = f"Қате орын алды: {str(e)}"
+        st.error(f"Құжатты өңдеу кезінде қате орын алды: {str(e)}")
         return None
 
-def generate_suggested_questions(context):
+def create_chain(vectorstore: FAISS):
+    """Create conversation chain"""
+    # Initialize LLM
+    llm = ChatOpenAI(
+        temperature=0.7,
+        model="gpt-4",
+        openai_api_key=api_key
+    )
+
+    # Create the retrieval chain
+    retriever = vectorstore.as_retriever(
+        search_type="similarity",
+        search_kwargs={"k": 3}
+    )
+
+    # Create the prompt template
+    template = """
+    Сен PDF құжаттың мазмұнын талдай алатын көмекшісің.
+    Құжаттың контексті:
+    {context}
+    
+    Чат тарихы:
+    {chat_history}
+    
+    Адам: {question}
+    Көмекші: Қазақ тілінде жауап беремін:
+    """
+
+    prompt = ChatPromptTemplate.from_template(template)
+
+    chain = (
+        {"context": retriever, 
+         "chat_history": RunnablePassthrough(), 
+         "question": RunnablePassthrough()}
+        | prompt
+        | llm
+        | StrOutputParser()
+    )
+
+    return chain
+
+def format_chat_history(history: List[Tuple[str, str]]) -> str:
+    """Format chat history for the prompt"""
+    formatted = []
+    for human, ai in history:
+        formatted.append(f"Адам: {human}")
+        formatted.append(f"Көмекші: {ai}")
+    return "\n".join(formatted)
+
+def generate_suggested_questions(context: str) -> List[str]:
+    """Generate suggested questions based on context"""
     try:
         if not api_key:
             return []
@@ -115,14 +157,17 @@ def generate_suggested_questions(context):
         llm = ChatOpenAI(
             temperature=0.7, 
             openai_api_key=api_key,
-            model_name='gpt-3.5-turbo'
+            model="gpt-4"
         )
-        prompt = f"""
-        Берілген контекст негізінде 3 ықтимал сұрақ ұсыныңыз. 
-        Сұрақтар қазақ тілінде болуы керек.
-        Контекст: {context}
-        """
-        response = llm.predict(prompt)
+        
+        prompt = ChatPromptTemplate.from_messages([
+            ("system", "Сен қазақ тілінде сұрақтар ұсынатын көмекшісің."),
+            ("user", "Берілген контекст бойынша 3 мағыналы сұрақ ұсын:\n\n{context}")
+        ])
+        
+        chain = prompt | llm | StrOutputParser()
+        response = chain.invoke({"context": context})
+        
         questions = [q.strip() for q in response.split('\n') if q.strip()]
         return questions[:3]
     except Exception:
@@ -138,19 +183,17 @@ if api_key:
 uploaded_file = st.file_uploader("PDF құжатты жүктеңіз", type="pdf")
 
 if uploaded_file and api_key:
-    if not st.session_state.conversation:
+    if st.session_state.vectorstore is None:
         with st.spinner("Құжат өңделуде..."):
-            st.session_state.conversation = process_pdf(uploaded_file)
-            if st.session_state.conversation:
+            st.session_state.vectorstore = process_pdf(uploaded_file)
+            if st.session_state.vectorstore:
                 st.success("Құжат сәтті жүктелді!")
 
-# Show error if exists
-if st.session_state.error:
-    st.error(st.session_state.error)
-    st.session_state.error = None
-
 # Chat interface
-if st.session_state.conversation:
+if st.session_state.vectorstore:
+    # Create chain
+    chain = create_chain(st.session_state.vectorstore)
+    
     # Chat input
     user_question = st.text_input("Сұрағыңызды қазақ тілінде жазыңыз:")
     
@@ -165,31 +208,42 @@ if st.session_state.conversation:
     if user_question:
         try:
             with st.spinner("Жауап іздеуде..."):
-                response = st.session_state.conversation({
-                    'question': f"""
-                    Сұраққа қазақ тілінде жауап беріңіз. 
-                    Егер құжатта жауап табылмаса, оны айтыңыз.
-                    Сұрақ: {user_question}
-                    """
+                # Format chat history
+                chat_history = format_chat_history(st.session_state.chat_history)
+                
+                # Get response
+                response = chain.invoke({
+                    "question": user_question,
+                    "chat_history": chat_history
                 })
                 
                 # Store chat history
-                st.session_state.chat_history.append((user_question, response['answer']))
+                st.session_state.chat_history.append((user_question, response))
                 
                 # Generate new suggested questions
-                st.session_state.suggested_questions = generate_suggested_questions(response['answer'])
+                st.session_state.suggested_questions = generate_suggested_questions(response)
 
                 # Refresh the page to show new content
                 st.experimental_rerun()
                 
         except Exception as e:
-            st.error(f"Қате орын алды: {str(e)}")
+            st.error(f"Жауап алу кезінде қате орын алды: {str(e)}")
 
 # Display chat history
-for question, answer in st.session_state.chat_history:
-    st.write(f"🙋‍♂️ **Сұрақ:** {question}")
-    st.write(f"🤖 **Жауап:** {answer}")
-    st.markdown("---")
+for i, (question, answer) in enumerate(st.session_state.chat_history):
+    # User message
+    st.markdown(f"""
+    <div class="chat-message user-message">
+        <b>🙋‍♂️ Сұрақ:</b><br>{question}
+    </div>
+    """, unsafe_allow_html=True)
+    
+    # Bot message
+    st.markdown(f"""
+    <div class="chat-message bot-message">
+        <b>🤖 Жауап:</b><br>{answer}
+    </div>
+    """, unsafe_allow_html=True)
 
 # Footer
 st.markdown("""
