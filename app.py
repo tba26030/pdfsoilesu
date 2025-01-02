@@ -1,5 +1,6 @@
 import streamlit as st
-from langchain.embeddings import OpenAIEmbeddings
+import os
+from langchain.embeddings.openai import OpenAIEmbeddings
 from langchain.vectorstores import FAISS
 from langchain.document_loaders import PyPDFLoader
 from langchain.chains import ChatVectorDBChain
@@ -32,8 +33,15 @@ if not uploaded_file:
 
 # PDF құжатты өңдеу
 st.info("PDF құжат өңделуде, күтіңіз...")
-loader = PyPDFLoader(uploaded_file)
+# Файлды уақытша сақтау
+with open("temp.pdf", "wb") as f:
+    f.write(uploaded_file.getbuffer())
+
+loader = PyPDFLoader("temp.pdf")
 documents = loader.load()
+
+# Уақытша файлды жою
+os.remove("temp.pdf")
 
 # Embedding және вектор қоры
 embeddings = OpenAIEmbeddings()
@@ -41,7 +49,7 @@ vectorstore = FAISS.from_documents(documents, embeddings)
 st.success("PDF құжат өңделіп, вектор қоры дайындалды!")
 
 # Чат функциясы
-chat_model = ChatOpenAI(temperature=0.5, model_name="gpt-4o")
+chat_model = ChatOpenAI(temperature=0.5, model_name="gpt-3.5-turbo")
 qa_chain = ChatVectorDBChain.from_llm(chat_model, vectorstore)
 
 # Сұрақ енгізу
