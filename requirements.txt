@@ -1,9 +1,10 @@
 streamlit
 openai
-langchain==0.0.220
+langchain
 faiss-cpu
 PyPDF2
 tiktoken
 pymupdf
 pydantic
 tenacity
+python-dotenv
