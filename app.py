@@ -1,102 +1,152 @@
 import streamlit as st
-import os
-from PyPDF2 import PdfReader
+from langchain.document_loaders import PyPDFLoader
+from langchain.text_splitter import CharacterTextSplitter
 from langchain.embeddings.openai import OpenAIEmbeddings
 from langchain.vectorstores import FAISS
-from langchain.text_splitter import CharacterTextSplitter
-from langchain.chains import ChatVectorDBChain
 from langchain.chat_models import ChatOpenAI
-from openai.error import OpenAIError
-from tenacity import retry, stop_after_attempt, wait_exponential
-import openai
+from langchain.memory import ConversationBufferMemory
+from langchain.chains import ConversationalRetrievalChain
+import tempfile
+import os
 
-# Бағдарлама атауы
-st.set_page_config(page_title="PDF құжатпен қазақша сөйлесу", layout="wide")
-
-# Бағдарлама шапкасы
-st.title("PDF құжатпен қазақша сөйлесу")
-st.markdown(
-    "Бұл бағдарлама PDF құжаттардан қазақша сұрақтарға жауап береді. OpenAI API пайдаланылады. "
-    "PDF құжаттағы ақпаратқа сәйкес ықтимал сұрақтардың тізімін де ұсынады."
+# Streamlit page configuration
+st.set_page_config(
+    page_title="PDF құжатпен қазақша сөйлесу",
+    page_icon="📚",
+    layout="wide"
 )
 
-# OpenAI API кілтін енгізу
-api_key = st.text_input("OpenAI API кілтіңізді енгізіңіз:", type="password")
-if not api_key:
-    st.warning("Жалғастыру үшін OpenAI API кілтін енгізіңіз.")
-    st.stop()
+# Custom CSS for better UI
+st.markdown("""
+    <style>
+    .stApp {
+        max-width: 1200px;
+        margin: 0 auto;
+    }
+    .css-1d391kg {
+        padding: 2rem 1rem;
+    }
+    .stButton>button {
+        width: 100%;
+    }
+    </style>
+    """, unsafe_allow_html=True)
 
-openai.api_key = api_key
+# Title and description
+st.title("📚 PDF құжатпен қазақша сөйлесу")
+st.markdown("PDF құжаттарыңызбен қазақ тілінде сөйлесіңіз. Кез-келген тілдегі PDF құжаттарға қазақша сұрақ қоя аласыз.")
 
-# PDF файл жүктеу
-uploaded_file = st.file_uploader("PDF файлды жүктеңіз:", type="pdf")
-if not uploaded_file:
-    st.info("PDF құжатты жүктеген соң бағдарламаны пайдалана аласыз.")
-    st.stop()
+# Initialize session state
+if 'conversation' not in st.session_state:
+    st.session_state.conversation = None
+if 'chat_history' not in st.session_state:
+    st.session_state.chat_history = []
+if 'suggested_questions' not in st.session_state:
+    st.session_state.suggested_questions = []
 
-# PDF құжатты өңдеу
-st.info("PDF құжат өңделуде, күтіңіз...")
-# Файлды уақытша сақтау
-with open("temp.pdf", "wb") as f:
-    f.write(uploaded_file.getbuffer())
+# API key input
+api_key = st.text_input("OpenAI API кілтін енгізіңіз:", type="password")
 
-# PDF мәтінін оқу
-with open("temp.pdf", "rb") as f:
-    reader = PdfReader(f)
-    raw_text = ""
-    for page in reader.pages:
-        raw_text += page.extract_text()
+def process_pdf(uploaded_file):
+    with tempfile.NamedTemporaryFile(delete=False) as tmp_file:
+        tmp_file.write(uploaded_file.getvalue())
+        tmp_file_path = tmp_file.name
 
-# Уақытша файлды жою
-os.remove("temp.pdf")
+    # Load and split the PDF
+    loader = PyPDFLoader(tmp_file_path)
+    documents = loader.load()
+    text_splitter = CharacterTextSplitter(chunk_size=1000, chunk_overlap=200)
+    documents = text_splitter.split_documents(documents)
 
-# Мәтінді бөлу
-text_splitter = CharacterTextSplitter(chunk_size=1000, chunk_overlap=200)
-documents = text_splitter.create_documents([raw_text])
-texts = [doc.page_content for doc in documents]
-
-# Embedding объектісін құру
-@retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=4, max=10))
-def get_embeddings_with_retry(texts):
+    # Create embeddings and vector store
     embeddings = OpenAIEmbeddings(openai_api_key=api_key)
-    return embeddings.embed_documents(texts)
+    vectorstore = FAISS.from_documents(documents, embeddings)
 
-# FAISS вектор қорын құру
-try:
-    embeddings = OpenAIEmbeddings(openai_api_key=api_key)
-    vectorstore = FAISS.from_texts(texts, embeddings)
-    st.success("PDF құжат өңделіп, вектор қоры дайындалды!")
-except OpenAIError as e:
-    st.error(f"OpenAI API қатесі: {e}")
-    st.stop()
-except Exception as e:
-    st.error(f"Басқа қате: {e}")
-    st.stop()
+    # Create conversation chain
+    llm = ChatOpenAI(
+        temperature=0.7,
+        model_name='gpt-4',
+        openai_api_key=api_key
+    )
+    memory = ConversationBufferMemory(
+        memory_key='chat_history',
+        return_messages=True
+    )
+    
+    conversation_chain = ConversationalRetrievalChain.from_llm(
+        llm=llm,
+        retriever=vectorstore.as_retriever(),
+        memory=memory,
+    )
 
-# Чат функциясы
-chat_model = ChatOpenAI(temperature=0.5, model_name="gpt-3.5-turbo")
-qa_chain = ChatVectorDBChain.from_llm(chat_model, vectorstore)
+    # Clean up temp file
+    os.unlink(tmp_file_path)
+    
+    return conversation_chain
 
-# Сұрақ енгізу
-st.subheader("Сұрақ қойыңыз")
-user_query = st.text_input("Сіздің сұрағыңыз:")
-if user_query:
-    with st.spinner("Жауап ізделуде..."):
-        response = qa_chain.run(user_query)
-        st.markdown(f"**Жауап:** {response}")
+def generate_suggested_questions(context):
+    if not api_key:
+        return []
+    
+    llm = ChatOpenAI(temperature=0.7, openai_api_key=api_key)
+    prompt = f"""
+    Берілген контекст негізінде 3 ықтимал сұрақ ұсыныңыз. 
+    Сұрақтар қазақ тілінде болуы керек.
+    Контекст: {context}
+    """
+    response = llm.predict(prompt)
+    questions = [q.strip() for q in response.split('\n') if q.strip()]
+    return questions[:3]
 
-        # Ықтимал сұрақтарды ұсыну
-        follow_up_questions = [
-            "Бұл тақырыпқа байланысты тағы не білуге болады?",
-            "Құжаттағы негізгі фактілер қандай?",
-            "Мәтіндегі ұқсас тақырыптар туралы айтып беріңіз."
-        ]
-        st.subheader("Ықтимал сұрақтар")
-        for i, question in enumerate(follow_up_questions, 1):
-            st.write(f"{i}. {question}")
+# File upload
+uploaded_file = st.file_uploader("PDF құжатты жүктеңіз", type="pdf")
 
-# Қосымша ақпарат
-st.markdown(
-    "---\nБұл бағдарламаны жасаған [Тимур Бектұр](https://www.instagram.com/timurbektur). "
-    "Егер сіз де жасанды интеллект арқылы бағдарлама жасауды үйренгіңіз келсе немесе басқа да идеялар бойынша бағдарламалар жасағыңыз келсе, маған хабарласыңыз."
-)
+if uploaded_file and api_key:
+    if not st.session_state.conversation:
+        with st.spinner("Құжат өңделуде..."):
+            st.session_state.conversation = process_pdf(uploaded_file)
+        st.success("Құжат сәтті жүктелді!")
+
+# Chat interface
+if st.session_state.conversation:
+    # Chat input
+    user_question = st.text_input("Сұрағыңызды қазақ тілінде жазыңыз:")
+    
+    # Suggested questions buttons
+    if st.session_state.suggested_questions:
+        st.write("Ықтимал сұрақтар:")
+        cols = st.columns(len(st.session_state.suggested_questions))
+        for i, question in enumerate(st.session_state.suggested_questions):
+            if cols[i].button(question):
+                user_question = question
+
+    if user_question:
+        with st.spinner("Жауап іздеуде..."):
+            response = st.session_state.conversation({
+                'question': f"""
+                Сұраққа қазақ тілінде жауап беріңіз. 
+                Егер құжатта жауап табылмаса, оны айтыңыз.
+                Сұрақ: {user_question}
+                """
+            })
+            
+            # Store chat history
+            st.session_state.chat_history.append((user_question, response['answer']))
+            
+            # Generate new suggested questions
+            st.session_state.suggested_questions = generate_suggested_questions(response['answer'])
+
+# Display chat history
+for question, answer in st.session_state.chat_history:
+    st.write(f"🙋‍♂️ **Сұрақ:** {question}")
+    st.write(f"🤖 **Жауап:** {answer}")
+    st.markdown("---")
+
+# Footer
+st.markdown("""
+---
+Бұл бағдарламаны жасаған Тимур Бектұр. 
+Егер сіз де жасанды интеллект арқылы бағдарлама жасауды үйренгіңіз келсе, 
+өзге де идеялар бойынша ЖИ арқылы өзіңізге қосымша жасағыңыз келсе, 
+маған хабарласыңыз: instagram @timurbektur
+""")
