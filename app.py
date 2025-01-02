@@ -53,7 +53,7 @@ text_splitter = CharacterTextSplitter(chunk_size=1000, chunk_overlap=200)
 documents = text_splitter.create_documents([raw_text])
 
 # Embedding және вектор қоры
-embeddings = OpenAIEmbeddings()
+embeddings = OpenAIEmbeddings(openai_api_key=api_key)
 vectorstore = FAISS.from_documents(documents, embeddings)
 st.success("PDF құжат өңделіп, вектор қоры дайындалды!")
 
