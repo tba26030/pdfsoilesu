@@ -1,5 +1,5 @@
 import streamlit as st
-from langchain.embeddings.openai import OpenAIEmbeddings
+from langchain.embeddings import OpenAIEmbeddings
 from langchain.vectorstores import FAISS
 from langchain.document_loaders import PyPDFLoader
 from langchain.chains import ChatVectorDBChain
