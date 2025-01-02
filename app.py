@@ -6,6 +6,7 @@ from langchain.vectorstores import FAISS
 from langchain.text_splitter import CharacterTextSplitter
 from langchain.chains import ChatVectorDBChain
 from langchain.chat_models import ChatOpenAI
+from openai.error import OpenAIError
 from tenacity import retry, stop_after_attempt, wait_exponential
 import openai
 
@@ -65,8 +66,11 @@ try:
     embeddings = OpenAIEmbeddings(openai_api_key=api_key)
     vectorstore = FAISS.from_texts(texts, embeddings)
     st.success("PDF құжат өңделіп, вектор қоры дайындалды!")
+except OpenAIError as e:
+    st.error(f"OpenAI API қатесі: {e}")
+    st.stop()
 except Exception as e:
-    st.error(f"FAISS қате: {e}")
+    st.error(f"Басқа қате: {e}")
     st.stop()
 
 # Чат функциясы
