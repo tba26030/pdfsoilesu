@@ -6,6 +6,7 @@ from langchain.vectorstores import FAISS
 from langchain.text_splitter import CharacterTextSplitter
 from langchain.chains import ChatVectorDBChain
 from langchain.chat_models import ChatOpenAI
+from tenacity import retry, stop_after_attempt, wait_exponential
 import openai
 
 # Бағдарлама атауы
@@ -51,11 +52,22 @@ os.remove("temp.pdf")
 # Мәтінді бөлу
 text_splitter = CharacterTextSplitter(chunk_size=1000, chunk_overlap=200)
 documents = text_splitter.create_documents([raw_text])
+texts = [doc.page_content for doc in documents]
 
-# Embedding және вектор қоры
-embeddings = OpenAIEmbeddings(openai_api_key=api_key)
-vectorstore = FAISS.from_documents(documents, embeddings)
-st.success("PDF құжат өңделіп, вектор қоры дайындалды!")
+# Embedding объектісін құру
+@retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=4, max=10))
+def get_embeddings_with_retry(texts):
+    embeddings = OpenAIEmbeddings(openai_api_key=api_key)
+    return embeddings.embed_documents(texts)
+
+# FAISS вектор қорын құру
+try:
+    embeddings = OpenAIEmbeddings(openai_api_key=api_key)
+    vectorstore = FAISS.from_texts(texts, embeddings)
+    st.success("PDF құжат өңделіп, вектор қоры дайындалды!")
+except Exception as e:
+    st.error(f"FAISS қате: {e}")
+    st.stop()
 
 # Чат функциясы
 chat_model = ChatOpenAI(temperature=0.5, model_name="gpt-3.5-turbo")
