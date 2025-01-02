@@ -5,3 +5,4 @@ faiss-cpu
 PyPDF2
 tiktoken
 pymupdf
+pydantic
