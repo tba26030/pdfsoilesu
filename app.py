@@ -98,7 +98,8 @@ def process_pdf(uploaded_file):
 
         memory = ConversationBufferMemory(
             memory_key='chat_history',
-            return_messages=True
+            return_messages=True,
+            output_key='answer'  # Explicitly specify which output to store
         )
 
         conversation_chain = ConversationalRetrievalChain.from_llm(
@@ -106,7 +107,7 @@ def process_pdf(uploaded_file):
             retriever=vectorstore.as_retriever(search_kwargs={'k': 3}),
             memory=memory,
             return_source_documents=True,
-            verbose=True
+            verbose=False
         )
 
         # Clean up temp file
@@ -194,6 +195,7 @@ if st.session_state.conversation:
                 
         except Exception as e:
             st.error(f"Жауап алу кезінде қате орын алды: {str(e)}")
+            st.error("Толық қате: " + str(e))
 
 # Display chat history
 for i, (question, answer) in enumerate(st.session_state.chat_history):
